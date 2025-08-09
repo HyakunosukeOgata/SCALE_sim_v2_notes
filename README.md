@@ -40,7 +40,7 @@ DETAILED_ACCESS_REPORT.csv – access counts and cycles for each operand in SRAM
 
 ## 🧪 My Observations and Experience
 
-**Experiment setup:**
+**Experiment setup (Google_TPU_v1):**
 - **Array size:** High (weight = 255 × 255)
 - **SRAM sizes:** IFMAP = 8192 MB, FILTER = 8192 MB, OFMAP = 8192 MB
 - **Memory offsets:** IFMAP = 0, FILTER = 10,000,000, OFMAP = 20,000,000
