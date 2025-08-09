@@ -112,9 +112,70 @@ DETAILED_ACCESS_REPORT.csv – access counts and cycles for each operand in SRAM
 | PW-FF-L1   | 1024 | 1600 | 1 | 1600 | 1 | 3072  | 1 |
 
 ---
+## 🧩 Design Suggestions from This Report (PE Array / SRAM / Workload Fit)
 
-### 💡 Insights
-- **Dataflow choice is critical:** WS mode performs well for dense GEMM operations (GPT-2) but poorly for depthwise convolutions (MobileNet).
-- **OFMAP DRAM bottleneck:** In MobileNet, OFMAP writes saturate DRAM bandwidth (256) in most layers, indicating a write-back bottleneck.
-- **Utilization gap:** The same hardware configuration shows drastically different utilization between CNN and Transformer workloads, emphasizing the need for workload-specific hardware tuning.
+This section provides actionable recommendations for **PE array size & aspect ratio**, **SRAM sizing & partitioning**, and **workload suitability**, based on the observed results (low utilization in MobileNet, ~50% utilization in GPT-2, sustained OFMAP DRAM saturation at 256 in MobileNet).
 
+---
+
+### 1) PE Array: Size & Aspect Ratio
+**Observation link**: MobileNet layers are dominated by depthwise separable and 1×1 convolutions → extremely low utilization; GPT-2 large GEMM layers achieve ~50% utilization.
+
+- **For CNN/Depthwise (MobileNet)**  
+  - Use a **smaller or partitionable array** to avoid massive PE idling when the number of channels per layer is small.  
+    Example: reduce from 255×255 to **128×128** or **64×128**, or enable **multi-partition mode** to activate only part of the array dynamically.
+  - Support **non-square (rectangular)** shapes: for 1×1 or low-channel layers, shapes like **64×256** or **128×256** can improve mapping efficiency by stretching spatial tiling along the longer dimension.
+  - **Per-layer dataflow switching**: for depthwise, use OS/RS (Output-Stationary / Row-Stationary) to reduce OFMAP write-backs.
+
+- **For Transformer/GEMM (GPT-2)**  
+  - Match **matrix aspect ratio** with **configurable array shapes**:  
+    - tall-skinny (M≫N) → **256×128**  
+    - wide-short (N≫M) → **128×256**  
+    - near-square → **256×256** or **192×192**
+  - If external bandwidth is not a bottleneck, **increase total PE count** beyond 255×255 — but verify DRAM/NoC throughput.
+
+> TL;DR: CNNs benefit from “partitionable + rectangular” arrays for small-channel layers; GEMM prefers “large + aspect-ratio matched” arrays.
+
+---
+
+### 2) SRAM: Capacity & Partitioning
+**Observation link**: In MobileNet, **Avg OFMAP DRAM BW = 256** is saturated across many layers → output write-backs are the main bottleneck.
+
+- **Prioritize expanding OFMAP SRAM (with double-buffering)**:  
+  Goal: keep partial sums on-chip longer, reducing OFMAP write-back frequency.  
+  Recommendation: given IFMAP/FILTER are both 8192 MB, **rebalance more capacity to OFMAP** if total SRAM budget cannot grow.
+- **Increase SRAM bank count and multi-porting**:  
+  Reduce bank conflicts and prevent on-chip write stalls.
+- **Enable compression and write-combining**:  
+  Apply zero compression or bit-width compression to OFMAP before DRAM write, and coalesce small writes at the DMA interface.
+
+> Rule of thumb: if **Avg OFMAP DRAM BW** is persistently maxed out, first expand OFMAP SRAM/double-buffer, then consider increasing interface bandwidth.
+
+---
+
+### 3) Workload Suitability
+- **Large GEMM / Transformer (GPT-2)**:  
+  Well-suited for **large arrays** with WS/IS dataflows; utilization improves when array shape matches the matrix aspect ratio.  
+  Once mapping efficiency is already high (~80–90%), check if **interface/DRAM/NoC** become the next limiting factor.
+- **Depthwise / 1×1-heavy CNN (MobileNet)**:  
+  Best served by **partitionable or smaller arrays**, OS/RS dataflows, and **larger OFMAP SRAM**. Otherwise, expect simultaneous **OFMAP DRAM saturation** and **PE idling**.
+
+---
+
+### 4) Quantitative Validation Plan (Sweep in SCALE-Sim)
+To quantify design trade-offs, run the following sweeps:
+
+1. **Array shapes & sizes**:  
+   `64×128, 128×128, 128×256, 192×192, 256×256` (with partitioning on/off).
+2. **Dataflow**:  
+   MobileNet → try OS/RS; GPT-2 → try WS/IS (per-layer switching).
+3. **SRAM allocation**:  
+   Keep total size constant, shift more to OFMAP; enable double-buffering.
+4. **Compression & precision**:  
+   Compare Avg OFMAP DRAM BW and Total Cycles before/after enabling compression.
+5. **Interface bandwidth ceiling**:  
+   From `256 → 384/512` to see if MobileNet escapes bandwidth bottlenecks, while checking if GPT-2 remains compute-bound.
+
+**Success criteria**:  
+- MobileNet: Avg OFMAP DRAM BW no longer pinned at 256; Overall Util improves.  
+- GPT-2: Maintain high Mapping Efficiency while increasing Compute Util, without introducing new bandwidth bottlenecks.
