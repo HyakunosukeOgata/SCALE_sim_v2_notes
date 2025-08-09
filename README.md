@@ -162,20 +162,43 @@ This section provides actionable recommendations for **PE array size & aspect ra
 
 ---
 
-### 4) Quantitative Validation Plan (Sweep in SCALE-Sim)
-To quantify design trade-offs, run the following sweeps:
+## 🏁 Overall Summary of This Experiment
 
-1. **Array shapes & sizes**:  
-   `64×128, 128×128, 128×256, 192×192, 256×256` (with partitioning on/off).
-2. **Dataflow**:  
-   MobileNet → try OS/RS; GPT-2 → try WS/IS (per-layer switching).
-3. **SRAM allocation**:  
-   Keep total size constant, shift more to OFMAP; enable double-buffering.
-4. **Compression & precision**:  
-   Compare Avg OFMAP DRAM BW and Total Cycles before/after enabling compression.
-5. **Interface bandwidth ceiling**:  
-   From `256 → 384/512` to see if MobileNet escapes bandwidth bottlenecks, while checking if GPT-2 remains compute-bound.
+This round of experiments with **SCALE-Sim v2** explored its ability to model different workloads — specifically **MobileNet (CNN)** and **GPT-2 (Transformer/GEMM)** — under the same hardware configuration:
 
-**Success criteria**:  
-- MobileNet: Avg OFMAP DRAM BW no longer pinned at 256; Overall Util improves.  
-- GPT-2: Maintain high Mapping Efficiency while increasing Compute Util, without introducing new bandwidth bottlenecks.
+- **Array size**: 255 × 255 (Weight-Stationary mode)
+- **SRAM sizes**: IFMAP/FILTER/OFMAP each 8192 MB
+- **Interface Bandwidth**: CALC mode, DRAM BW limit 256
+- **Memory banks**: 4
+
+### Key Findings
+1. **Workload-dependent utilization gap**  
+   - MobileNet depthwise & 1×1 convolution layers achieved extremely low overall utilization (<3% in many layers), despite having no stall cycles.  
+   - GPT-2 GEMM layers achieved much higher utilization (~50%), benefiting from dense matrix operations.
+   
+2. **OFMAP DRAM saturation in MobileNet**  
+   - Multiple layers hit the DRAM write bandwidth limit (256), indicating that output write-backs, not computation, were the primary bottleneck.
+
+3. **Mapping efficiency vs. compute utilization**  
+   - GPT-2 achieved high mapping efficiency (~80–90%) but compute utilization still lagged behind the theoretical maximum, suggesting room for hardware-array shape tuning.
+
+4. **Same hardware, different needs**  
+   - A single fixed hardware configuration cannot simultaneously maximize utilization for both depthwise CNN layers and large GEMM workloads without either array reconfiguration or dynamic dataflow switching.
+
+### Reflections on SCALE-Sim v2 as a Tool
+- **Strengths**:  
+  - Flexible modeling of systolic array architectures with configurable size, dataflow, and memory hierarchy.  
+  - Clear and detailed reports on cycles, utilization, and bandwidth, enabling precise bottleneck analysis.  
+  - Supports both CNN and GEMM workloads, making it applicable for mixed AI models.
+
+- **Limitations**:  
+  - Does not directly model some micro-architectural optimizations (e.g., partial sum compression, bank conflict handling).  
+  - Results rely on static configurations — dynamic reconfiguration needs to be tested by multiple runs with adjusted parameters.
+
+- **Best use cases**:  
+  - Early-stage design space exploration for AI accelerators.  
+  - Comparative analysis between workloads (e.g., CNN vs. Transformer).  
+  - Validating bandwidth and on-chip memory sizing before committing to RTL or hardware prototypes.
+
+**Conclusion**:  
+SCALE-Sim v2 proved to be a valuable tool for identifying **utilization gaps**, **memory bottlenecks**, and **dataflow mismatches** between workloads. While it does not replace cycle-accurate RTL simulation for final hardware validation, it significantly accelerates **design iteration and architectural decision-making** at the pre-implementation stage.
